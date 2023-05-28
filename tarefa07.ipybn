@@ -1,0 +1,583 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "6e49e7ad",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "2023-05-27 19:48:31.176423: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.\n",
+      "To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.\n",
+      "2023-05-27 19:48:32.491202: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT\n"
+     ]
+    }
+   ],
+   "source": [
+    "import os\n",
+    "import pathlib\n",
+    "\n",
+    "import numpy as np\n",
+    "import tensorflow as tf\n",
+    "\n",
+    "from tensorflow.keras import layers\n",
+    "from tensorflow.keras import models\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "38ccab9d",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "2023-05-27 19:48:53.275547: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:48:53.904826: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:48:53.905135: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n"
+     ]
+    }
+   ],
+   "source": [
+    "# carregando a seed do dataset e definindo a sua rota\n",
+    "seed = 42\n",
+    "tf.random.set_seed(seed)\n",
+    "np.random.seed(seed)\n",
+    "\n",
+    "\n",
+    "DATASET_PATH = '/home/rafaelrosendo/figas/ptBR_multi_v01'\n",
+    "\n",
+    "SAMPLING_FREQ = 24000\n",
+    "\n",
+    "#verificando o uso da gpu\n",
+    "print(tf.config.list_physical_devices('GPU'))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "31ca5e9e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def squeeze(audio, labels):\n",
+    "  audio = tf.squeeze(audio, axis=-1)\n",
+    "  return audio, labels\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "dd70acc6",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def get_spectrogram(waveform):\n",
+    "  # Convert the waveform to a spectrogram via a STFT.\n",
+    "  spectrogram = tf.signal.stft(\n",
+    "      waveform, frame_length=255, frame_step=128)\n",
+    "  # Obtain the magnitude of the STFT.\n",
+    "  spectrogram = tf.abs(spectrogram)\n",
+    "  # Add a `channels` dimension, so that the spectrogram can be used\n",
+    "  # as image-like input data with convolution layers (which expect\n",
+    "  # shape (`batch_size`, `height`, `width`, `channels`).\n",
+    "  spectrogram = spectrogram[..., tf.newaxis]\n",
+    "  return spectrogram"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "b855f354",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def make_spec_ds(ds):\n",
+    "  return ds.map(\n",
+    "      map_func=lambda audio,label: (get_spectrogram(audio), label),\n",
+    "      num_parallel_calls=tf.data.AUTOTUNE)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "8f18b137",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "Speakers: ['spk78' 'spk19' 'spk84' 'spk31' 'spk42' 'spk44' 'spk10' 'spk38' 'spk17'\n",
+      " 'spk66' 'spk0' 'spk33' 'spk26' 'spk23' 'spk13' 'spk48' 'spk65' 'spk57'\n",
+      " 'spk46' 'spk20' 'spk32' 'spk74' 'spk18' 'spk54' 'spk41' 'spk40' 'spk1'\n",
+      " 'spk12' 'spk11' 'spk62' 'spk70' 'spk3' 'spk36' 'spk63' 'spk49' 'spk47'\n",
+      " 'spk43' 'spk5' 'spk59' 'spk8' 'spk24' 'spk83' 'spk14' 'spk4' 'spk45'\n",
+      " 'spk35' 'spk69' 'spk15' 'spk55' 'spk58' 'spk72' 'spk85' 'spk68' 'spk86'\n",
+      " 'spk50' 'spk64' 'spk2' 'spk51' 'spk6' 'spk29' 'spk37' 'spk21' 'spk9'\n",
+      " 'spk56' 'spk77' 'spk34' 'spk22' 'spk27' 'spk16' 'spk82' 'spk61' 'spk39'\n",
+      " 'spk60' 'spk71' 'spk67' 'spk7' 'spk76' 'spk73' 'spk53' 'spk30' 'spk28'\n",
+      " 'spk52' 'spk25']\n",
+      "\n",
+      "Total of 83 speakers\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "if __name__ == \"__main__\":\n",
+    "\n",
+    "\t# check data dir\n",
+    "\tdata_dir = pathlib.Path(DATASET_PATH)\n",
+    "\tassert data_dir.exists(), f'{DATASET_PATH} not found.'\n",
+    "\t# list speakers\n",
+    "\tspeakers = np.array(tf.io.gfile.listdir(str(data_dir)))\n",
+    "\tprint(f'\\nSpeakers: {speakers}\\n')\n",
+    "\tprint(f'Total of {len(speakers)} speakers\\n')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "ce050fe7",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Found 12512 files belonging to 83 classes.\n",
+      "Using 10010 files for training.\n",
+      "Using 2502 files for validation.\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "2023-05-27 19:49:02.148654: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:49:02.148961: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:49:02.149192: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:49:04.271933: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:49:04.272216: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:49:04.272376: I tensorflow/compiler/xla/stream_executor/cuda/cuda_gpu_executor.cc:996] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355\n",
+      "2023-05-27 19:49:04.272504: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1635] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 6319 MB memory:  -> device: 0, name: NVIDIA GeForce RTX 2060 SUPER, pci bus id: 0000:23:00.0, compute capability: 7.5\n"
+     ]
+    }
+   ],
+   "source": [
+    "# create dataset   \n",
+    "train_ds, val_ds = tf.keras.utils.audio_dataset_from_directory(\n",
+    "\t\tdirectory=data_dir,\n",
+    "\t\tbatch_size=16,\n",
+    "\t\tvalidation_split=0.2,\n",
+    "\t\tseed=0,\n",
+    "\t\toutput_sequence_length=SAMPLING_FREQ,\n",
+    "\t\tsubset='both')\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "1d5c7275",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "Label names: ['spk0' 'spk1' 'spk10' 'spk11' 'spk12' 'spk13' 'spk14' 'spk15' 'spk16'\n",
+      " 'spk17' 'spk18' 'spk19' 'spk2' 'spk20' 'spk21' 'spk22' 'spk23' 'spk24'\n",
+      " 'spk25' 'spk26' 'spk27' 'spk28' 'spk29' 'spk3' 'spk30' 'spk31' 'spk32'\n",
+      " 'spk33' 'spk34' 'spk35' 'spk36' 'spk37' 'spk38' 'spk39' 'spk4' 'spk40'\n",
+      " 'spk41' 'spk42' 'spk43' 'spk44' 'spk45' 'spk46' 'spk47' 'spk48' 'spk49'\n",
+      " 'spk5' 'spk50' 'spk51' 'spk52' 'spk53' 'spk54' 'spk55' 'spk56' 'spk57'\n",
+      " 'spk58' 'spk59' 'spk6' 'spk60' 'spk61' 'spk62' 'spk63' 'spk64' 'spk65'\n",
+      " 'spk66' 'spk67' 'spk68' 'spk69' 'spk7' 'spk70' 'spk71' 'spk72' 'spk73'\n",
+      " 'spk74' 'spk76' 'spk77' 'spk78' 'spk8' 'spk82' 'spk83' 'spk84' 'spk85'\n",
+      " 'spk86' 'spk9']\n",
+      "\n",
+      "Specs of the batches: (TensorSpec(shape=(None, 24000, None), dtype=tf.float32, name=None), TensorSpec(shape=(None,), dtype=tf.int32, name=None))\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# list classes: speaker names\n",
+    "label_names = np.array(train_ds.class_names)\n",
+    "print(f'\\nLabel names: {label_names}\\n')\n",
+    "\n",
+    "# print format of the data\n",
+    "print(f'Specs of the batches: {train_ds.element_spec}\\n')\n",
+    "\n",
+    "# removes one dimension from audio\n",
+    "train_ds = train_ds.map(squeeze, tf.data.AUTOTUNE)\n",
+    "val_ds = val_ds.map(squeeze, tf.data.AUTOTUNE)\n",
+    "\n",
+    "# split the validation data into test and validation\n",
+    "test_ds = val_ds.shard(num_shards=2, index=0)\n",
+    "val_ds = val_ds.shard(num_shards=2, index=1)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "39e34fb5",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "2023-05-27 19:49:04.593987: I tensorflow/core/common_runtime/executor.cc:1197] [/device:CPU:0] (DEBUG INFO) Executor start aborting (this does not indicate an error and you can ignore this message): INVALID_ARGUMENT: You must feed a value for placeholder tensor 'Placeholder/_4' with dtype int32 and shape [10010]\n",
+      "\t [[{{node Placeholder/_4}}]]\n",
+      "2023-05-27 19:49:04.594255: I tensorflow/core/common_runtime/executor.cc:1197] [/device:CPU:0] (DEBUG INFO) Executor start aborting (this does not indicate an error and you can ignore this message): INVALID_ARGUMENT: You must feed a value for placeholder tensor 'Placeholder/_4' with dtype int32 and shape [10010]\n",
+      "\t [[{{node Placeholder/_4}}]]\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "(16, 24000)\n",
+      "(16,)\n"
+     ]
+    }
+   ],
+   "source": [
+    "# check the format of the audio and labels\n",
+    "for example_audio, example_labels in train_ds.take(1):\n",
+    "    print(example_audio.shape)\n",
+    "    print(example_labels.shape)\n",
+    "\n",
+    "# extract spectrograms from speech\n",
+    "train_spectrogram_ds = make_spec_ds(train_ds)\n",
+    "val_spectrogram_ds = make_spec_ds(val_ds)\n",
+    "test_spectrogram_ds = make_spec_ds(test_ds)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "9ad914b9",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "2023-05-27 19:49:05.039063: I tensorflow/core/common_runtime/executor.cc:1197] [/device:CPU:0] (DEBUG INFO) Executor start aborting (this does not indicate an error and you can ignore this message): INVALID_ARGUMENT: You must feed a value for placeholder tensor 'Placeholder/_4' with dtype int32 and shape [10010]\n",
+      "\t [[{{node Placeholder/_4}}]]\n",
+      "2023-05-27 19:49:05.039324: I tensorflow/core/common_runtime/executor.cc:1197] [/device:CPU:0] (DEBUG INFO) Executor start aborting (this does not indicate an error and you can ignore this message): INVALID_ARGUMENT: You must feed a value for placeholder tensor 'Placeholder/_0' with dtype string and shape [10010]\n",
+      "\t [[{{node Placeholder/_0}}]]\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# look at the spectrogram batches\n",
+    "for example_spectrograms, example_spect_labels in train_spectrogram_ds.take(1):\n",
+    "\tbreak\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "57adf378",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# prefecth batches\n",
+    "train_spectrogram_ds = train_spectrogram_ds.cache().shuffle(10000).prefetch(tf.data.AUTOTUNE)\n",
+    "val_spectrogram_ds = val_spectrogram_ds.cache().prefetch(tf.data.AUTOTUNE)\n",
+    "test_spectrogram_ds = test_spectrogram_ds.cache().prefetch(tf.data.AUTOTUNE)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "bd11e3e1",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "Input shape: (186, 129, 1)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# get the input shape (to input at the network)\n",
+    "input_shape = example_spectrograms.shape[1:]\n",
+    "print(f'\\nInput shape: {input_shape}\\n')\n",
+    "num_labels = len(label_names)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "id": "65cf1e45",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "2023-05-27 19:49:05.250911: I tensorflow/core/common_runtime/executor.cc:1197] [/device:CPU:0] (DEBUG INFO) Executor start aborting (this does not indicate an error and you can ignore this message): INVALID_ARGUMENT: You must feed a value for placeholder tensor 'Placeholder/_4' with dtype int32 and shape [10010]\n",
+      "\t [[{{node Placeholder/_4}}]]\n",
+      "2023-05-27 19:49:05.251222: I tensorflow/core/common_runtime/executor.cc:1197] [/device:CPU:0] (DEBUG INFO) Executor start aborting (this does not indicate an error and you can ignore this message): INVALID_ARGUMENT: You must feed a value for placeholder tensor 'Placeholder/_4' with dtype int32 and shape [10010]\n",
+      "\t [[{{node Placeholder/_4}}]]\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Instantiate the `tf.keras.layers.Normalization` layer.\n",
+    "norm_layer = layers.Normalization()\n",
+    "\t# Fit the state of the layer to the spectrograms\n",
+    "\t# with `Normalization.adapt`.\n",
+    "norm_layer.adapt(data=train_spectrogram_ds.map(map_func=lambda spec, label: spec))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 77,
+   "id": "9f4039c0",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Model: \"sequential_16\"\n",
+      "_________________________________________________________________\n",
+      " Layer (type)                Output Shape              Param #   \n",
+      "=================================================================\n",
+      " resizing_16 (Resizing)      (None, 32, 32, 1)         0         \n",
+      "                                                                 \n",
+      " normalization (Normalizatio  (None, 32, 32, 1)        3         \n",
+      " n)                                                              \n",
+      "                                                                 \n",
+      " conv2d_47 (Conv2D)          (None, 30, 30, 256)       2560      \n",
+      "                                                                 \n",
+      " conv2d_48 (Conv2D)          (None, 28, 28, 128)       295040    \n",
+      "                                                                 \n",
+      " conv2d_49 (Conv2D)          (None, 26, 26, 64)        73792     \n",
+      "                                                                 \n",
+      " max_pooling2d_16 (MaxPoolin  (None, 13, 13, 64)       0         \n",
+      " g2D)                                                            \n",
+      "                                                                 \n",
+      " dropout_32 (Dropout)        (None, 13, 13, 64)        0         \n",
+      "                                                                 \n",
+      " flatten_16 (Flatten)        (None, 10816)             0         \n",
+      "                                                                 \n",
+      " dense_30 (Dense)            (None, 1024)              11076608  \n",
+      "                                                                 \n",
+      " dropout_33 (Dropout)        (None, 1024)              0         \n",
+      "                                                                 \n",
+      " dense_31 (Dense)            (None, 83)                85075     \n",
+      "                                                                 \n",
+      "=================================================================\n",
+      "Total params: 11,533,078\n",
+      "Trainable params: 11,533,075\n",
+      "Non-trainable params: 3\n",
+      "_________________________________________________________________\n"
+     ]
+    }
+   ],
+   "source": [
+    "# construção do modelo\n",
+    "model = models.Sequential([\n",
+    "\tlayers.Input(shape=input_shape),\n",
+    "\t# fazendo a arquitetura\n",
+    "\tlayers.Resizing(32, 32),\n",
+    "\t\t# Normalize.\n",
+    "\tnorm_layer,\n",
+    "\tlayers.Conv2D(256, 3, activation='relu'),\n",
+    "    layers.Conv2D(128, 3, activation='relu'),\n",
+    "    layers.Conv2D(64, 3, activation='relu'),\n",
+    "\tlayers.MaxPooling2D(),\n",
+    "\tlayers.Dropout(0.5),\n",
+    "\tlayers.Flatten(),\n",
+    "\tlayers.Dense(1024, activation='relu'),\n",
+    "\tlayers.Dropout(0.5),\n",
+    "\tlayers.Dense(num_labels),\n",
+    "])\n",
+    "model.summary()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 78,
+   "id": "d49c7627",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# compilando o modelo\n",
+    "model.compile(\n",
+    "\toptimizer=tf.keras.optimizers.Adam(),\n",
+    "\tloss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),\n",
+    "\tmetrics=['accuracy'],\n",
+    ")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 79,
+   "id": "0916f259",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Epoch 1/25\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "2023-05-28 14:13:37.469976: E tensorflow/core/grappler/optimizers/meta_optimizer.cc:954] layout failed: INVALID_ARGUMENT: Size of values 0 does not match size of permutation 4 @ fanin shape insequential_16/dropout_32/dropout/SelectV2-2-TransposeNHWCToNCHW-LayoutOptimizer\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "626/626 [==============================] - 6s 8ms/step - loss: 2.2130 - accuracy: 0.5109 - val_loss: 1.5981 - val_accuracy: 0.6522\n",
+      "Epoch 2/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 1.4991 - accuracy: 0.6585 - val_loss: 1.3069 - val_accuracy: 0.6923\n",
+      "Epoch 3/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 1.2496 - accuracy: 0.6971 - val_loss: 1.1948 - val_accuracy: 0.6995\n",
+      "Epoch 4/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 1.0856 - accuracy: 0.7255 - val_loss: 1.1004 - val_accuracy: 0.7252\n",
+      "Epoch 5/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.9776 - accuracy: 0.7450 - val_loss: 1.0006 - val_accuracy: 0.7548\n",
+      "Epoch 6/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.8907 - accuracy: 0.7655 - val_loss: 0.9953 - val_accuracy: 0.7404\n",
+      "Epoch 7/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.8118 - accuracy: 0.7847 - val_loss: 0.8884 - val_accuracy: 0.7740\n",
+      "Epoch 8/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.7444 - accuracy: 0.7958 - val_loss: 0.8375 - val_accuracy: 0.7708\n",
+      "Epoch 9/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.6892 - accuracy: 0.8060 - val_loss: 0.8879 - val_accuracy: 0.7764\n",
+      "Epoch 10/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.6411 - accuracy: 0.8195 - val_loss: 0.8426 - val_accuracy: 0.7732\n",
+      "Epoch 11/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.6146 - accuracy: 0.8253 - val_loss: 0.9292 - val_accuracy: 0.7716\n",
+      "Epoch 12/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.5889 - accuracy: 0.8314 - val_loss: 0.8476 - val_accuracy: 0.7877\n",
+      "Epoch 13/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.5685 - accuracy: 0.8364 - val_loss: 0.8563 - val_accuracy: 0.7845\n",
+      "Epoch 14/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.5195 - accuracy: 0.8488 - val_loss: 0.8810 - val_accuracy: 0.7909\n",
+      "Epoch 15/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.5022 - accuracy: 0.8537 - val_loss: 0.8404 - val_accuracy: 0.7821\n",
+      "Epoch 16/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.4887 - accuracy: 0.8548 - val_loss: 0.8751 - val_accuracy: 0.7772\n",
+      "Epoch 17/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.4565 - accuracy: 0.8654 - val_loss: 0.8992 - val_accuracy: 0.7877\n",
+      "Epoch 18/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.4274 - accuracy: 0.8751 - val_loss: 1.0112 - val_accuracy: 0.7788\n",
+      "Epoch 19/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.4218 - accuracy: 0.8742 - val_loss: 0.8895 - val_accuracy: 0.8005\n",
+      "Epoch 20/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.4163 - accuracy: 0.8742 - val_loss: 0.8299 - val_accuracy: 0.8013\n",
+      "Epoch 21/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.4116 - accuracy: 0.8816 - val_loss: 0.8428 - val_accuracy: 0.7933\n",
+      "Epoch 22/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.3566 - accuracy: 0.8933 - val_loss: 0.8784 - val_accuracy: 0.7941\n",
+      "Epoch 23/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.3473 - accuracy: 0.8951 - val_loss: 1.0016 - val_accuracy: 0.7845\n",
+      "Epoch 24/25\n",
+      "626/626 [==============================] - 5s 8ms/step - loss: 0.3626 - accuracy: 0.8937 - val_loss: 1.0141 - val_accuracy: 0.7829\n",
+      "Epoch 25/25\n",
+      "626/626 [==============================] - 5s 7ms/step - loss: 0.3355 - accuracy: 0.8997 - val_loss: 0.9419 - val_accuracy: 0.7901\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "os.environ['CUDA_HOME'] = '/home/rafaelrosendo/anaconda3/pkgs/cudatoolkit-11.8.0-h6a678d5_0'\n",
+    "\n",
+    "# treino\n",
+    "EPOCHS = 25\n",
+    "history = model.fit(\n",
+    "\ttrain_spectrogram_ds,\n",
+    "\tvalidation_data=val_spectrogram_ds,\n",
+    "\tepochs=EPOCHS,\n",
+    "\t#callbacks=tf.keras.callbacks.EarlyStopping(verbose=1, patience=2),\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 80,
+   "id": "1f4565d1",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "79/79 [==============================] - 0s 2ms/step - loss: 0.8720 - accuracy: 0.7847\n"
+     ]
+    },
+    {
+     "data": {
+      "text/plain": [
+       "{'loss': 0.8719855546951294, 'accuracy': 0.7846890091896057}"
+      ]
+     },
+     "execution_count": 80,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "\n",
+    "\t# acurácia e perda\n",
+    "\tmodel.evaluate(test_spectrogram_ds, return_dict=True)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "tf2",
+   "language": "python",
+   "name": "tf2"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.9.16"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
